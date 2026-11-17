@@ -6,6 +6,28 @@ export interface RangeList<T> {
     [name: string]: [T, number] | [T, number][];
 }
 
+// Options controlling how ambiguous historical numeric notations are handled.
+export interface NormalizeOptions {
+    // When true, only plain four-part dotted-decimal IPv4 is accepted.
+    // Hexadecimal, octal and compressed inet_aton forms are rejected.
+    // Defaults to false: such forms remain legal but are canonicalized.
+    strict?: boolean;
+}
+
+// The result of normalize(): the parsed network identity paired with the
+// exact original literal so that allowlist/dedup code can key on `canonical`
+// while audit logs keep `original`.
+export interface NormalizedAddress {
+    kind: 'ipv4' | 'ipv6';
+    original: string;
+    canonical: string;
+    address: IPv4 | IPv6;
+    // True when the input spelling differs from the canonical one.
+    ambiguous: boolean;
+    // IPv6 zone ID (RFC 4007); absent for IPv4.
+    zoneId?: string;
+}
+
 // Common methods/properties for IPv4 and IPv6 classes.
 export class IP {
     prefixLengthFromSubnetMask(): number | null;
@@ -17,6 +39,7 @@ export class IP {
 export function fromByteArray(bytes: number[]): IPv4 | IPv6;
 export function isValid(addr: string): boolean;
 export function isValidCIDR(addr: string): boolean;
+export function normalize(addr: string, options?: NormalizeOptions): NormalizedAddress;
 export function parse(addr: string): IPv4 | IPv6;
 export function parseCIDR(mask: string): [IPv4 | IPv6, number];
 export function process(addr: string): IPv4 | IPv6;
@@ -30,6 +53,7 @@ export class IPv4 extends IP {
     static isValidFourPartDecimal(addr: string): boolean;
     static isValidCIDRFourPartDecimal(addr: string): boolean;
     static networkAddressFromCIDR(addr: string): IPv4;
+    static normalize(addr: string, options?: NormalizeOptions): NormalizedAddress;
     static parse(addr: string): IPv4;
     static parseCIDR(addr: string): [IPv4, number];
     static subnetMaskFromPrefixLength(prefix: number): IPv4;
@@ -49,6 +73,7 @@ export class IPv6 extends IP {
     static isValid(addr: string): boolean;
     static isValidCIDR(addr: string): boolean;
     static networkAddressFromCIDR(addr: string): IPv6;
+    static normalize(addr: string, options?: NormalizeOptions): NormalizedAddress;
     static parse(addr: string): IPv6;
     static parseCIDR(addr: string): [IPv6, number];
     static subnetMaskFromPrefixLength(prefix: number): IPv6;

@@ -1,3 +1,20 @@
+### Unreleased
+
+- add `normalize()` (global, `IPv4`, `IPv6`) returning a normalized identity
+  object that pairs the canonical network identity (`canonical`, `address`)
+  with the verbatim audit literal (`original`), plus an `ambiguous` flag and
+  the IPv6 `zoneId`; use it to key allowlists/dedup on the parsed identity so
+  octal, hexadecimal and compressed IPv4 spellings cannot bypass string-based
+  allowlists
+- `normalize()` accepts historical `inet_aton` numeric forms by default and
+  canonicalizes them; `{ strict: true }` rejects every non four-part
+  dotted-decimal IPv4 notation
+- `normalize()` rejects literals embedding a port (`127.0.0.1:80`,
+  `[fe80::1]:80`) instead of treating the port as part of the identity
+- fix: the IPv6 transitional parser now converts embedded IPv4 octets with
+  the same `parseIntAuto` logic as the IPv4 parser, so leading-zero/hex octets
+  cannot be interpreted differently by the two entry points
+
 ### 2.5.0 - 2026-08-04
 
 - remove `ipaddr.min.js`, end users must provide own minification/bundling

@@ -41,16 +41,17 @@ prefix;             // => 8
 - [Global API](#global-api)
   - [isValid](#ipaddrIsValid)
   - [isValidCIDR](#ipaddrIsValidCIDR)
+  - [normalize](#ipaddrNormalize)
   - [parse](#ipaddrParse)
   - [parseCIDR](#ipaddrParseCIDR)
   - [process](#ipaddrProcess)
   - [subnetMatch](#ipaddrSubnetMatch)
   - [fromByteArray](#ipaddrFromByteArray)
 - [IPv4 API](#ipv4-api)
-  - Static: [isValid](#ipv4-isvalid), [isValidCIDR](#ipv4-isvalidcidr), [isValidFourPartDecimal](#ipv4-isvalidfourpartdecimal), [isValidCIDRFourPartDecimal](#ipv4-isvalidcidrfourpartdecimal), [isIPv4](#ipv4-isipv4), [parse](#ipv4-parse), [parseCIDR](#ipv4-parsecidr), [broadcastAddressFromCIDR](#ipv4-broadcastaddressfromcidr), [networkAddressFromCIDR](#ipv4-networkaddressfromcidr), [subnetMaskFromPrefixLength](#ipv4-subnetmaskfromprefixlength)
+  - Static: [isValid](#ipv4-isvalid), [isValidCIDR](#ipv4-isvalidcidr), [isValidFourPartDecimal](#ipv4-isvalidfourpartdecimal), [isValidCIDRFourPartDecimal](#ipv4-isvalidcidrfourpartdecimal), [isIPv4](#ipv4-isipv4), [normalize](#ipv4-normalize), [parse](#ipv4-parse), [parseCIDR](#ipv4-parsecidr), [broadcastAddressFromCIDR](#ipv4-broadcastaddressfromcidr), [networkAddressFromCIDR](#ipv4-networkaddressfromcidr), [subnetMaskFromPrefixLength](#ipv4-subnetmaskfromprefixlength)
   - Instance: [octets](#ipv4-octets), [kind()](#ipv4-kind), [match()](#ipv4-match), [range()](#ipv4-range), [prefixLengthFromSubnetMask()](#ipv4-prefixlengthfromsubnetmask), [subnetMatch()](#ipv4-subnetmatch-instance), [toByteArray()](#ipv4-tobytearray), [toIPv4MappedAddress()](#ipv4-toipv4mappedaddress), [toNormalizedString()](#ipv4-tonormalizedstring), [toString()](#ipv4-tostring)
 - [IPv6 API](#ipv6-api)
-  - Static: [isValid](#ipv6-isvalid), [isValidCIDR](#ipv6-isvalidcidr), [isIPv6](#ipv6-isipv6), [parse](#ipv6-parse), [parseCIDR](#ipv6-parsecidr), [broadcastAddressFromCIDR](#ipv6-broadcastaddressfromcidr), [networkAddressFromCIDR](#ipv6-networkaddressfromcidr), [subnetMaskFromPrefixLength](#ipv6-subnetmaskfromprefixlength)
+  - Static: [isValid](#ipv6-isvalid), [isValidCIDR](#ipv6-isvalidcidr), [isIPv6](#ipv6-isipv6), [normalize](#ipv6-normalize), [parse](#ipv6-parse), [parseCIDR](#ipv6-parsecidr), [broadcastAddressFromCIDR](#ipv6-broadcastaddressfromcidr), [networkAddressFromCIDR](#ipv6-networkaddressfromcidr), [subnetMaskFromPrefixLength](#ipv6-subnetmaskfromprefixlength)
   - Instance: [parts](#ipv6-parts), [zoneId](#ipv6-zoneid), [kind()](#ipv6-kind), [isIPv4MappedAddress()](#ipv6-isipv4mappedaddress), [match()](#ipv6-match), [range()](#ipv6-range), [prefixLengthFromSubnetMask()](#ipv6-prefixlengthfromsubnetmask), [subnetMatch()](#ipv6-subnetmatch-instance), [toByteArray()](#ipv6-tobytearray), [toFixedLengthString()](#ipv6-tofixedlengthstring), [toIPv4Address()](#ipv6-toipv4address), [toNormalizedString()](#ipv6-tonormalizedstring), [toRFC5952String()](#ipv6-torfc5952string), [toString()](#ipv6-tostring)
 
 ---
@@ -130,6 +131,43 @@ ipaddr.process('::ffff:192.168.1.1').kind();     // => 'ipv4'
 ipaddr.process('2001:db8::1').kind();            // => 'ipv6'
 ipaddr.process('192.168.1.1').kind();            // => 'ipv4'
 ```
+
+<a name="ipaddrNormalize"></a>
+### `ipaddr.normalize(string[, options])`
+
+Parses an address and returns an object that pairs the **parsed network identity** with the **exact original literal**, so allowlist matching and deduplication can key on one canonical value while audit logs retain what was actually received:
+
+```js
+{
+  kind:      'ipv4' | 'ipv6',
+  original:  string,               // the verbatim input, for audit logs
+  canonical: string,               // single canonical spelling of the address
+  address:   IPv4 | IPv6,          // the parsed address object
+  ambiguous: boolean,              // true when original !== canonical
+  zoneId:    string | undefined,   // IPv6 zone ID (RFC 4007), if present
+}
+```
+
+Every spelling of one host collapses into the same `canonical` value. This removes the allowlist/dedup ambiguity created by the historical IPv4 notations accepted by the parser (octal, hexadecimal and compressed `inet_aton` forms) and by alternate IPv6 spellings. Always authorize and deduplicate on `canonical` (or `address`), never on `original`.
+
+```js
+ipaddr.normalize('0177.0.0.1').canonical;  // => '127.0.0.1'
+ipaddr.normalize('0x7f000001').canonical;  // => '127.0.0.1'
+ipaddr.normalize('127.0.0.1').canonical;   // => '127.0.0.1'
+// all three compare equal on `canonical`, yet each keeps its own `original`
+
+ipaddr.normalize('2001:DB8::1').canonical; // => '2001:db8::1'
+ipaddr.normalize('fe80::1%eth0').zoneId;   // => 'eth0'
+```
+
+**Ambiguous numeric policy.** By default the historical IPv4 forms stay legal (they parse exactly as `parse()` does) but their ambiguity is removed by canonicalization. Pass `{ strict: true }` to accept only plain four-part dotted-decimal IPv4 and reject octal, hexadecimal and compressed forms:
+
+```js
+ipaddr.normalize('0177.0.0.1', { strict: true }); // throws
+ipaddr.normalize('127.0.0.1', { strict: true }).canonical; // => '127.0.0.1'
+```
+
+**Ports and zones.** A literal that embeds a port (`127.0.0.1:80`, `[fe80::1]:80`) is rejected — a port must be split off by the caller and must never become part of an audited identity. An IPv6 zone ID is part of the scoped identity and is preserved in both `canonical` and `zoneId`; addresses that differ only by zone are distinct identities.
 
 <a name="ipaddrSubnetMatch"></a>
 ### `ipaddr.subnetMatch(address, rangeList[, defaultName])`
@@ -255,6 +293,17 @@ Parses an IPv4 CIDR address and returns `[IPv4, prefixLength]`. Throws if the in
 const [addr, prefix] = ipaddr.IPv4.parseCIDR('192.168.1.0/24');
 addr.toString(); // => '192.168.1.0'
 prefix;          // => 24
+```
+
+<a name="ipv4-normalize"></a>
+#### `ipaddr.IPv4.normalize(string[, options])`
+
+Returns the normalized identity object described under [`ipaddr.normalize`](#ipaddrNormalize), restricted to IPv4. Octal, hexadecimal and compressed `inet_aton` spellings remain accepted by default but canonicalize to plain four-part dotted-decimal; `{ strict: true }` rejects every non-standard notation. Inputs containing a port are always rejected.
+
+```js
+ipaddr.IPv4.normalize('0177.0.0.1');
+// => { kind: 'ipv4', original: '0177.0.0.1', canonical: '127.0.0.1',
+//      address: IPv4 [127,0,0,1], ambiguous: true }
 ```
 
 <a name="ipv4-broadcastaddressfromcidr"></a>
@@ -451,6 +500,18 @@ Parses an IPv6 CIDR address and returns `[IPv6, prefixLength]`. Throws if the in
 const [addr, prefix] = ipaddr.IPv6.parseCIDR('2001:db8::/32');
 addr.toString(); // => '2001:db8::'
 prefix;          // => 32
+```
+
+<a name="ipv6-normalize"></a>
+#### `ipaddr.IPv6.normalize(string)`
+
+Returns the normalized identity object described under [`ipaddr.normalize`](#ipaddrNormalize), restricted to IPv6. `canonical` is the RFC 5952 spelling (including the zone suffix when present) and `zoneId` exposes the zone separately. The `strict` option has no effect on IPv6, which has no ambiguous numeric radix. Inputs containing a port, including bracketed `[...]:port` form, are rejected.
+
+```js
+ipaddr.IPv6.normalize('2001:DB8::1%eth0');
+// => { kind: 'ipv6', original: '2001:DB8::1%eth0',
+//      canonical: '2001:db8::1%eth0', address: IPv6, zoneId: 'eth0',
+//      ambiguous: true }
 ```
 
 <a name="ipv6-broadcastaddressfromcidr"></a>

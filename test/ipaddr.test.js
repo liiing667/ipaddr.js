@@ -1,7 +1,7 @@
 import { ok, doesNotThrow, throws, equal, deepEqual } from 'node:assert';
 import { describe, it } from 'node:test';
 
-import { IPv4, IPv6, parseCIDR, parse, process, isValid, subnetMatch, fromByteArray } from '../lib/ipaddr.js';
+import { IPv4, IPv6, parseCIDR, parse, process, normalize, isValid, subnetMatch, fromByteArray } from '../lib/ipaddr.js';
 
 describe('ipaddr', () => {
 
@@ -802,5 +802,131 @@ describe('ipaddr', () => {
         equal(IPv6.broadcastAddressFromCIDR('2001:db9:f500::1/40'),   '2001:db9:f5ff:ffff:ffff:ffff:ffff:ffff');
         equal(IPv6.broadcastAddressFromCIDR('2001:db9:f500::1%z/40'), '2001:db9:f5ff:ffff:ffff:ffff:ffff:ffff');
         equal(IPv6.broadcastAddressFromCIDR('2001:db8:f53a::1/128'),  '2001:db8:f53a::1');
+    })
+
+    // Normalization table: every spelling of one host must collapse into one
+    // canonical network identity while the literal is retained for auditing.
+    // This is the contract allowlists/dedup/audit code must rely on.
+    const normalizationTable = [
+        // standard dotted-decimal is already canonical
+        ['127.0.0.1',                'ipv4', '127.0.0.1',      false],
+        // octal octet (inet_aton historical form)
+        ['0177.0.0.1',               'ipv4', '127.0.0.1',      true],
+        ['0300.0250.01.01',          'ipv4', '192.168.1.1',    true],
+        // hexadecimal octets
+        ['0x7f.0.0.1',               'ipv4', '127.0.0.1',      true],
+        ['0xc0.0xa8.0x01.0x01',      'ipv4', '192.168.1.1',    true],
+        // single-value / compressed classful forms
+        ['0x7f000001',               'ipv4', '127.0.0.1',      true],
+        ['2130706433',               'ipv4', '127.0.0.1',      true],
+        ['127.1',                    'ipv4', '127.0.0.1',      true],
+        ['127.0.1',                  'ipv4', '127.0.0.1',      true],
+        ['127.0.0.0x1',              'ipv4', '127.0.0.1',      true],
+        ['192.168.257',              'ipv4', '192.168.1.1',    true],
+        // IPv6 alternate spellings of one address
+        ['2001:db8::1',              'ipv6', '2001:db8::1',    false],
+        ['2001:0db8:0000:0000:0000:0000:0000:0001',
+                                                      'ipv6', '2001:db8::1',    true],
+        ['2001:DB8::1',              'ipv6', '2001:db8::1',    true],
+        // scoped IPv6: the zone ID is part of the identity
+        ['fe80::1%eth0',             'ipv6', 'fe80::1%eth0',   false],
+        ['FE80::1%eth0',             'ipv6', 'fe80::1%eth0',   true],
+        // IPv4-mapped IPv6 spellings collapse together
+        ['::ffff:127.0.0.1',         'ipv6', '::ffff:7f00:1',  true],
+        ['::ffff:0177.0.0.1',        'ipv6', '::ffff:7f00:1',  true],
+        ['0:0:0:0:0:ffff:7f00:1',    'ipv6', '::ffff:7f00:1',  true]
+    ];
+
+    it('normalize() collapses ambiguous spellings into one canonical identity', () => {
+        const seenCanonicals = new Set();
+
+        for (const [input, kind, canonical, ambiguous] of normalizationTable) {
+            const result = normalize(input);
+
+            equal(result.kind, kind);
+            equal(result.original, input);
+            equal(result.canonical, canonical);
+            equal(result.ambiguous, ambiguous);
+            equal(result.address.toString(), canonical);
+
+            seenCanonicals.add(canonical);
+        }
+
+        // the distinct hosts covered by the table remain separate identities
+        deepEqual([...seenCanonicals].sort(),
+            ['127.0.0.1', '192.168.1.1', '2001:db8::1', '::ffff:7f00:1',
+                'fe80::1%eth0'].sort());
+    })
+
+    it('normalize() keeps the parsed object and the audit literal in sync', () => {
+        const result = normalize('0177.0.0.1');
+
+        equal(result.original, '0177.0.0.1');
+        equal(result.canonical, '127.0.0.1');
+        deepEqual(result.address.octets, [127, 0, 0, 1]);
+        // allowlist matching must use the canonical identity, never the literal
+        equal(result.canonical, normalize('127.0.0.1').canonical);
+        equal(result.original === normalize('127.0.0.1').original, false);
+    })
+
+    it('normalize() exposes the IPv6 zone ID instead of hiding it', () => {
+        equal(normalize('fe80::1%eth0').zoneId, 'eth0');
+        equal(normalize('2001:db8::1').zoneId, undefined);
+        // different zones are different scoped identities
+        equal(normalize('fe80::1%eth0').canonical === normalize('fe80::1%wlan0').canonical, false);
+    })
+
+    it('normalize() rejects inputs that embed a port instead of minting a new identity', () => {
+        throws(() => normalize('127.0.0.1:80'));
+        throws(() => normalize('127.0.0.1:0'));
+        throws(() => normalize('[127.0.0.1]:80'));
+        throws(() => normalize('[fe80::1]:80'));
+        throws(() => normalize('[fe80::1%eth0]:443'));
+        // a bare trailing ":<hex>" on an IPv6 literal is a hextet, not a port
+        // bracket form is the only way to attach a port to an IPv6 literal
+        equal(normalize('fe80::1:80').canonical, 'fe80::1:80');
+    })
+
+    it('normalize() throws on non-strings and unparseable input', () => {
+        throws(() => normalize(undefined));
+        throws(() => normalize(127001));
+        throws(() => normalize('not.an.ip.address'));
+        throws(() => normalize('10.048.1.1'));
+    })
+
+    it('normalize() strict mode rejects ambiguous IPv4 numeric forms', () => {
+        equal(normalize('127.0.0.1', { strict: true }).canonical, '127.0.0.1');
+        throws(() => normalize('0177.0.0.1', { strict: true }));
+        throws(() => normalize('0x7f.0.0.1', { strict: true }));
+        throws(() => normalize('0x7f000001', { strict: true }));
+        throws(() => normalize('2130706433', { strict: true }));
+        throws(() => normalize('127.1', { strict: true }));
+        // strict is opt-in: historical parsing still works without the flag
+        equal(normalize('0177.0.0.1').canonical, '127.0.0.1');
+        // IPv6 normalization is unaffected by the IPv4-only strict flag
+        equal(normalize('2001:DB8::1', { strict: true }).canonical, '2001:db8::1');
+    })
+
+    it('IPv4.normalize and IPv6.normalize match the top-level normalize', () => {
+        deepEqual(IPv4.normalize('0177.0.0.1'), normalize('0177.0.0.1'));
+        deepEqual(IPv6.normalize('2001:DB8::1%z'), normalize('2001:DB8::1%z'));
+        throws(() => IPv4.normalize('2001:db8::1'));
+        throws(() => IPv6.normalize('127.0.0.1'));
+    })
+
+    it('IPv6 transitional parser interprets embedded IPv4 octets like the IPv4 parser', () => {
+        // the two entry points must never disagree on one literal (CWE-436)
+        const transitional = IPv6.parse('::ffff:0177.0.0.1');
+        const standalone = IPv4.parse('0177.0.0.1');
+
+        deepEqual(transitional.toIPv4Address().octets, standalone.octets);
+        equal(transitional.toNormalizedString(), '0:0:0:0:0:ffff:7f00:1');
+        equal(IPv6.isValid('::ffff:0177.0.0.1'), true);
+        // an invalid octal octet is rejected on both paths
+        throws(() => IPv4.parse('10.048.1.1'));
+        equal(IPv6.isValid('::ffff:10.048.1.1'), false);
+        // hex embedded octets keep working too
+        equal(IPv6.parse('::ffff:0x7f.0.0.1').toNormalizedString(),
+            '0:0:0:0:0:ffff:7f00:1');
     })
 })
