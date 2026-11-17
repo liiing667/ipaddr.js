@@ -646,6 +646,54 @@ describe('ipaddr', () => {
         throws(() => subnetMatch(address, { internal: [network, Infinity] }, 'external'));
     })
 
+    it('subnetMatch classifies by longest matching prefix regardless of key order', () => {
+        const address = IPv4.parse('192.168.1.1');
+        const broad = [IPv4.parse('192.168.0.0'), 16];
+        const narrow = [IPv4.parse('192.168.1.0'), 24];
+
+        equal(subnetMatch(address, { broad: broad, narrow: narrow }, false), 'narrow');
+        equal(subnetMatch(address, { narrow: narrow, broad: broad }, false), 'narrow');
+    })
+
+    it('subnetMatch resolves equal-length prefixes with a priority list', () => {
+        const address = IPv4.parse('10.0.0.1');
+        const rangeList = {
+            low: [IPv4.parse('10.0.0.0'), 8],
+            high: [IPv4.parse('10.0.0.0'), 8]
+        };
+
+        equal(subnetMatch(address, rangeList, false, ['high', 'low']), 'high');
+        equal(subnetMatch(address, rangeList, false, ['low', 'high']), 'low');
+    })
+
+    it('subnetMatch ignores inherited prototype keys', () => {
+        Object.prototype.inheritedRange = [IPv4.parse('8.8.0.0'), 16];
+        try {
+            equal(subnetMatch(IPv4.parse('8.8.8.8'), {}, 'unicast'), 'unicast');
+            equal(subnetMatch(IPv4.parse('8.8.8.8'), { private: [IPv4.parse('10.0.0.0'), 8] }, 'unicast'), 'unicast');
+        } finally {
+            delete Object.prototype.inheritedRange;
+        }
+    })
+
+    it('range() is independent of SpecialRanges insertion order', () => {
+        const reorderedV4 = {};
+        Object.keys(IPv4.SpecialRanges).reverse().forEach((name) => {
+            reorderedV4[name] = IPv4.SpecialRanges[name];
+        });
+
+        const reorderedV6 = {};
+        Object.keys(IPv6.SpecialRanges).reverse().forEach((name) => {
+            reorderedV6[name] = IPv6.SpecialRanges[name];
+        });
+
+        // Overlapping prefixes: the specific allocation must beat the
+        // enclosing reserved block no matter how the table is enumerated.
+        equal(subnetMatch(IPv4.parse('255.255.255.255'), reorderedV4), 'broadcast');
+        equal(subnetMatch(IPv6.parse('2001::4242'), reorderedV6), 'teredo');
+        equal(subnetMatch(IPv6.parse('2001:db8::1'), reorderedV6), 'reserved');
+    })
+
     it('is able to determine IP address type from byte array input', () => {
         equal(fromByteArray([0x7f, 0, 0, 1]).kind(), 'ipv4');
         equal(fromByteArray([0x20, 0x01, 0xd, 0xb8, 0xf5, 0x3a, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]).kind(), 'ipv6');

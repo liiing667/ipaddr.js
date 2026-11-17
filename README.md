@@ -132,11 +132,18 @@ ipaddr.process('192.168.1.1').kind();            // => 'ipv4'
 ```
 
 <a name="ipaddrSubnetMatch"></a>
-### `ipaddr.subnetMatch(address, rangeList[, defaultName])`
+### `ipaddr.subnetMatch(address, rangeList[, defaultName[, rangePriority]])`
 
-Matches `address` against a map of named CIDR ranges and returns the name of the first matching range. Returns `defaultName` (default: `'unicast'`) if no range matches.
+Matches `address` against a map of named CIDR ranges and returns the name of the matching range. Returns `defaultName` (default: `'unicast'`) if no range matches.
 
-Each `rangeList` value is either a single `[address, prefixLength]` pair or an array of such pairs. The list may mix IPv4 and IPv6 entries; entries of the wrong address family are safely skipped.
+Each `rangeList` value is either a single `[address, prefixLength]` pair or an array of such pairs. The list may mix IPv4 and IPv6 entries; entries of the wrong address family are safely skipped, so IPv4 and IPv6 matching always stay separate.
+
+Selection is deterministic and independent of object key insertion order:
+
+- The most specific match (longest prefix length) always wins, so an allocation nested inside a broader block — e.g. `255.255.255.255/32` inside `240.0.0.0/4` — is classified by its specific name rather than the enclosing block.
+- When two matching prefixes have the same length, `rangePriority` (an array of range names, highest precedence first) breaks the tie. Without it, the own-property declaration order of `rangeList` is used.
+- Only own enumerable properties of `rangeList` are considered; inherited/prototype keys are ignored.
+- An empty table, or a table with no matching prefix for the address family, returns `defaultName`.
 
 ```js
 const rangeList = {
@@ -152,6 +159,15 @@ ipaddr.subnetMatch(ipaddr.parse('192.168.1.1'), rangeList);          // => 'priv
 ipaddr.subnetMatch(ipaddr.parse('127.0.0.1'), rangeList);            // => 'loopback'
 ipaddr.subnetMatch(ipaddr.parse('8.8.8.8'), rangeList, 'public');    // => 'public'
 ipaddr.subnetMatch(ipaddr.parse('8.8.8.8'), rangeList);              // => 'unicast'
+```
+
+```js
+// Explicit tie-breaking for overlapping prefixes of equal length.
+const overlapping = {
+  a: ipaddr.parseCIDR('10.0.0.0/8'),
+  b: ipaddr.parseCIDR('10.0.0.0/8'),
+};
+ipaddr.subnetMatch(ipaddr.parse('10.0.0.1'), overlapping, 'unicast', ['b', 'a']); // => 'b'
 ```
 
 Using `parseCIDR()` also preserves the `[address, prefixLength]` tuple type in
@@ -328,6 +344,8 @@ addr.match(ipaddr.parseCIDR('192.168.1.0/24')); // => true
 Returns the name of the built-in range the address belongs to, or `'unicast'` if it does not match any special range. Recognised names: `'unspecified'`, `'broadcast'`, `'multicast'`, `'linkLocal'`, `'loopback'`, `'carrierGradeNat'`, `'private'`, `'reserved'`, `'as112'`, `'amt'`.
 
 See the [source][IPv4 ranges] for the full CIDR list associated with each name.
+
+Classification uses an explicit priority model rather than object key order: the longest matching prefix wins, and equal-length prefixes follow a fixed built-in precedence list, so overlapping allocations (e.g. the limited broadcast inside `240.0.0.0/4`) are always reported by their specific name.
 
 ```js
 ipaddr.parse('127.0.0.1').range();   // => 'loopback'
@@ -541,6 +559,8 @@ addr.match(ipaddr.parseCIDR('2001:db9::/32'));   // => false
 Returns the name of the built-in range the address belongs to, or `'unicast'` if it does not match any. Recognised names include: `'unspecified'`, `'linkLocal'`, `'multicast'`, `'loopback'`, `'uniqueLocal'`, `'ipv4Mapped'`, `'reserved'`, and others.
 
 See the [source][IPv6 ranges] for the full list.
+
+As with IPv4, matching is deterministic and independent of table order: the longest matching prefix wins and equal-length prefixes use a fixed built-in precedence. For example `2001::4242` is reported as `'teredo'` even though it also lies inside the broader `reserved` `2001::/23` block.
 
 ```js
 ipaddr.parse('::1').range();          // => 'loopback'

@@ -1,3 +1,9 @@
+### 3.0.0
+
+- fix: deterministic, explainable range classification — `subnetMatch`/`range()` select the longest matching prefix and resolve equal-length prefixes via an explicit priority list instead of `SpecialRanges` object key insertion order
+- `subnetMatch` now accepts an optional `rangePriority` array for explicit tie-breaking
+- `subnetMatch` only considers own enumerable range keys, so inherited (prototype) properties can no longer produce a match
+
 ### 2.5.0 - 2026-08-04
 
 - remove `ipaddr.min.js`, end users must provide own minification/bundling
